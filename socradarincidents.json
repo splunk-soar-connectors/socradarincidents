@@ -1,51 +1,390 @@
 {
-    "appid": "ffffffff-ffff-4fff-afff-ffffffffffff",
-    "name": "Example App Name",
-    "description": "Brief description of the app",
-    "type": "information",
-    "product_vendor": "Vendor Name",
+    "appid": "c7f3e2a1-8b9d-4e5f-a6b2-1d3c4e5f6789",
+    "name": "SOCRadar Incidents",
+    "description": "Ingest SOCRadar threat intelligence incidents (API v4) into Splunk SOAR with deduplication, rate-limit handling, and state-based polling.",
+    "type": "threat intel",
+    "product_vendor": "SOCRadar",
     "logo": "logo.svg",
     "logo_dark": "logo_dark.svg",
-    "product_name": "Product Name",
+    "product_name": "SOCRadar Platform",
+    "python_version": "3.9, 3.13",
     "product_version_regex": ".*",
-    "publisher": "Splunk",
-    "license": "Copyright (c) 2025 Splunk Inc.",
-    "app_version": "1.0.1",
-    "latest_tested_versions": [
-        "Version X.Y.Z, Month Year"
+    "publisher": "SOCRadar",
+    "contributors": [
+        {
+            "name": "SOCRadar Integration Team",
+            "domain": "community"
+        }
     ],
-    "utctime_updated": "2025-08-01T20:30:47.300351Z",
+    "license": "Copyright (c) 2025-2026 SOCRadar",
+    "app_version": "1.0.0",
+    "utctime_updated": "2026-03-10T00:00:00.000000Z",
     "package_name": "phantom_socradarincidents",
     "main_module": "socradarincidents_connector.py",
-    "app_config_render": "default",
     "min_phantom_version": "6.3.0",
-    "python_version": "3.9, 3.13",
-    "fips_compliant": true,
+    "fips_compliant": false,
+    "app_config_render": "default",
     "app_wizard_version": "1.0.0",
+    "latest_tested_versions": [
+        "On-Prem: 8.4.0"
+    ],
     "configuration": {
-        "host": {
+        "socradar_company_id": {
+            "description": "SOCRadar Company ID",
             "data_type": "string",
-            "order": 0,
-            "description": "Example Hostname or IP address",
-            "required": true
+            "required": true,
+            "order": 0
         },
-        "api_key": {
-            "data_type": "string",
-            "order": 1,
-            "description": "Example API Key for authentication",
-            "required": true
+        "socradar_api_key": {
+            "description": "SOCRadar API Key",
+            "data_type": "password",
+            "required": true,
+            "order": 1
+        },
+        "verify_server_cert": {
+            "description": "Verify server certificate",
+            "data_type": "boolean",
+            "required": false,
+            "default": false,
+            "order": 2
+        },
+        "first_run_max_incidents": {
+            "description": "Maximum incidents to ingest on first run (last 10 hours)",
+            "data_type": "numeric",
+            "required": false,
+            "default": 1000,
+            "order": 3
+        },
+        "max_incidents_per_poll": {
+            "description": "Maximum incidents per scheduled poll cycle",
+            "data_type": "numeric",
+            "required": false,
+            "default": 100,
+            "order": 4
         }
     },
     "actions": [
         {
             "action": "test connectivity",
             "identifier": "test_connectivity",
-            "description": "Validate the asset configuration for connectivity",
+            "description": "Validate the asset configuration for connectivity using supplied credentials",
+            "verbose": "Tests connectivity to the SOCRadar API v4 endpoint using the configured API key and company ID.",
             "type": "test",
             "read_only": true,
             "parameters": {},
             "output": [],
             "versions": "EQ(*)"
+        },
+        {
+            "action": "on poll",
+            "identifier": "on_poll",
+            "description": "Ingest SOCRadar incidents with deduplication and state management",
+            "verbose": "Fetches incidents from SOCRadar API v4 with pagination, rate-limit handling, and state-based deduplication. Creates containers and artifacts for new or status-changed incidents. First run fetches the last 10 hours; subsequent runs resume from the last checkpoint.",
+            "type": "ingest",
+            "read_only": true,
+            "parameters": {
+                "container_count": {
+                    "description": "Maximum number of containers to create (used by Poll Now)",
+                    "data_type": "numeric",
+                    "required": false,
+                    "default": 5
+                },
+                "start_time": {
+                    "description": "Start time for ingestion (epoch)",
+                    "data_type": "numeric",
+                    "required": false
+                },
+                "end_time": {
+                    "description": "End time for ingestion (epoch)",
+                    "data_type": "numeric",
+                    "required": false
+                },
+                "artifact_count": {
+                    "description": "Maximum number of artifacts per container",
+                    "data_type": "numeric",
+                    "required": false
+                }
+            },
+            "output": [],
+            "versions": "EQ(*)"
+        },
+        {
+            "action": "get incident",
+            "identifier": "get_incident",
+            "description": "Retrieve a single SOCRadar incident by alarm ID",
+            "verbose": "Fetches detailed information for a specific SOCRadar alarm using the incidents API v4.",
+            "type": "investigate",
+            "read_only": true,
+            "parameters": {
+                "incident_id": {
+                    "description": "SOCRadar Alarm ID to retrieve",
+                    "data_type": "string",
+                    "required": true,
+                    "contains": [
+                        "socradar incident id"
+                    ],
+                    "order": 0,
+                    "primary": true
+                }
+            },
+            "output": [
+                {
+                    "data_path": "action_result.data.*.alarm_id",
+                    "data_type": "numeric",
+                    "contains": [
+                        "socradar incident id"
+                    ]
+                },
+                {
+                    "data_path": "action_result.data.*.alarm_risk_level",
+                    "data_type": "string"
+                },
+                {
+                    "data_path": "action_result.data.*.status",
+                    "data_type": "string"
+                },
+                {
+                    "data_path": "action_result.data.*.alarm_main_type",
+                    "data_type": "string"
+                },
+                {
+                    "data_path": "action_result.data.*.alarm_sub_type",
+                    "data_type": "string"
+                },
+                {
+                    "data_path": "action_result.data.*.alarm_generic_title",
+                    "data_type": "string"
+                },
+                {
+                    "data_path": "action_result.data.*.date",
+                    "data_type": "string"
+                },
+                {
+                    "data_path": "action_result.status",
+                    "data_type": "string",
+                    "example_values": [
+                        "success",
+                        "failed"
+                    ]
+                },
+                {
+                    "data_path": "action_result.message",
+                    "data_type": "string"
+                },
+                {
+                    "data_path": "summary.alarm_id",
+                    "data_type": "numeric",
+                    "contains": [
+                        "socradar incident id"
+                    ]
+                },
+                {
+                    "data_path": "summary.status",
+                    "data_type": "string"
+                },
+                {
+                    "data_path": "summary.alarm_risk_level",
+                    "data_type": "string"
+                },
+                {
+                    "data_path": "action_result.parameter.incident_id",
+                    "data_type": "string",
+                    "contains": [
+                        "socradar incident id"
+                    ]
+                },
+                {
+                    "data_path": "summary.total_objects",
+                    "data_type": "numeric"
+                },
+                {
+                    "data_path": "summary.total_objects_successful",
+                    "data_type": "numeric"
+                }
+            ],
+            "versions": "EQ(*)"
+        },
+        {
+            "action": "update status",
+            "identifier": "update_status",
+            "description": "Update the status of a SOCRadar alarm",
+            "verbose": "Changes the status of a SOCRadar alarm using the API v4 status change endpoint. Supports statuses: OPEN, INVESTIGATING, RESOLVED, FALSE_POSITIVE, ON_HOLD, PENDING_INFO, LEGAL_REVIEW, VENDOR_ASSESSMENT, DUPLICATE, PROCESSED_INTERNALLY, MITIGATED, NOT_APPLICABLE.",
+            "type": "generic",
+            "read_only": false,
+            "parameters": {
+                "incident_id": {
+                    "description": "SOCRadar Alarm ID",
+                    "data_type": "string",
+                    "required": true,
+                    "contains": [
+                        "socradar incident id"
+                    ],
+                    "order": 0,
+                    "primary": true
+                },
+                "status": {
+                    "description": "New status for the alarm",
+                    "data_type": "string",
+                    "required": true,
+                    "value_list": [
+                        "OPEN",
+                        "INVESTIGATING",
+                        "RESOLVED",
+                        "FALSE_POSITIVE",
+                        "ON_HOLD",
+                        "PENDING_INFO",
+                        "LEGAL_REVIEW",
+                        "VENDOR_ASSESSMENT",
+                        "DUPLICATE",
+                        "PROCESSED_INTERNALLY",
+                        "MITIGATED",
+                        "NOT_APPLICABLE"
+                    ],
+                    "order": 1
+                },
+                "comment": {
+                    "description": "Optional comment for the status change",
+                    "data_type": "string",
+                    "required": false,
+                    "order": 2
+                }
+            },
+            "output": [
+                {
+                    "data_path": "action_result.status",
+                    "data_type": "string",
+                    "example_values": [
+                        "success",
+                        "failed"
+                    ]
+                },
+                {
+                    "data_path": "action_result.message",
+                    "data_type": "string"
+                },
+                {
+                    "data_path": "action_result.data.*.alarm_id",
+                    "data_type": "string",
+                    "contains": [
+                        "socradar incident id"
+                    ]
+                },
+                {
+                    "data_path": "action_result.data.*.new_status",
+                    "data_type": "string"
+                },
+                {
+                    "data_path": "summary.status_changed",
+                    "data_type": "boolean"
+                },
+                {
+                    "data_path": "action_result.parameter.incident_id",
+                    "data_type": "string",
+                    "contains": [
+                        "socradar incident id"
+                    ]
+                },
+                {
+                    "data_path": "action_result.parameter.status",
+                    "data_type": "string"
+                },
+                {
+                    "data_path": "action_result.parameter.comment",
+                    "data_type": "string"
+                },
+                {
+                    "data_path": "summary.total_objects",
+                    "data_type": "numeric"
+                },
+                {
+                    "data_path": "summary.total_objects_successful",
+                    "data_type": "numeric"
+                }
+            ],
+            "versions": "EQ(*)"
+        },
+        {
+            "action": "change severity",
+            "identifier": "change_severity",
+            "description": "Change the severity of a SOCRadar alarm",
+            "verbose": "Changes the severity of a SOCRadar alarm using the API v4 severity change endpoint. Supported values: Low, Medium, High.",
+            "type": "generic",
+            "read_only": false,
+            "parameters": {
+                "incident_id": {
+                    "description": "SOCRadar Alarm ID",
+                    "data_type": "string",
+                    "required": true,
+                    "contains": [
+                        "socradar incident id"
+                    ],
+                    "order": 0,
+                    "primary": true
+                },
+                "severity": {
+                    "description": "New severity for the alarm",
+                    "data_type": "string",
+                    "required": true,
+                    "value_list": [
+                        "Low",
+                        "Medium",
+                        "High"
+                    ],
+                    "order": 1
+                }
+            },
+            "output": [
+                {
+                    "data_path": "action_result.status",
+                    "data_type": "string",
+                    "example_values": [
+                        "success",
+                        "failed"
+                    ]
+                },
+                {
+                    "data_path": "action_result.message",
+                    "data_type": "string"
+                },
+                {
+                    "data_path": "action_result.data.*.alarm_id",
+                    "data_type": "string",
+                    "contains": [
+                        "socradar incident id"
+                    ]
+                },
+                {
+                    "data_path": "action_result.data.*.new_severity",
+                    "data_type": "string"
+                },
+                {
+                    "data_path": "summary.severity_changed",
+                    "data_type": "boolean"
+                },
+                {
+                    "data_path": "action_result.parameter.incident_id",
+                    "data_type": "string",
+                    "contains": [
+                        "socradar incident id"
+                    ]
+                },
+                {
+                    "data_path": "action_result.parameter.severity",
+                    "data_type": "string"
+                },
+                {
+                    "data_path": "summary.total_objects",
+                    "data_type": "numeric"
+                },
+                {
+                    "data_path": "summary.total_objects_successful",
+                    "data_type": "numeric"
+                }
+            ],
+            "versions": "EQ(*)"
         }
-    ]
+    ],
+    "pip_dependencies": {},
+    "pip3_dependencies": {},
+    "pip313_dependencies": {}
 }
