@@ -177,6 +177,7 @@ ERR_INVALID_INT = "Please provide a valid integer value for '{}'"
 ERR_NON_POSITIVE_INT = "Please provide a non-zero positive integer value for '{}'"
 ERR_FORBIDDEN = "Forbidden (403). Insufficient permissions for this resource."
 ERR_ALL_CONTAINERS_FAILED = "All {count} container saves failed; aborting ingestion."
+ERR_START_AFTER_END = "start_time must be earlier than end_time"
 
 # ──────────────────────────────────────────────────────────────────
 #  Success messages

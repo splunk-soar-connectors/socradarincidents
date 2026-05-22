@@ -74,6 +74,7 @@ from socradarincidents_consts import (
     ERR_NON_POSITIVE_INT,
     ERR_RATE_LIMIT,
     ERR_SAVE_CONTAINER,
+    ERR_START_AFTER_END,
     ERR_TIMEOUT,
     ERR_UNAUTHORIZED,
     FIRST_RUN_LOOKBACK_HOURS,
@@ -158,23 +159,6 @@ class SocradarincidentsConnector(BaseConnector):
         if not allow_zero and parameter <= 0:
             return action_result.set_status(phantom.APP_ERROR, ERR_NON_POSITIVE_INT.format(key)), None
         return phantom.APP_SUCCESS, parameter
-
-    @staticmethod
-    def _coerce_epoch_seconds(value: Any) -> int | None:
-        """
-        Coerce a numeric epoch value to seconds.
-
-        SOAR sometimes passes ``start_time``/``end_time`` as epoch milliseconds.
-        Anything larger than ~Sat Sep 9 2001 in milliseconds (10**12) is assumed
-        to already be milliseconds and gets divided by 1000.
-        """
-        if value is None or value == "":
-            return None
-        try:
-            num = int(value)
-        except (TypeError, ValueError):
-            return None
-        return num // 1000 if num > 10**12 else num
 
     @staticmethod
     def _coerce_positive_int(value: Any, default: int) -> int:
@@ -571,9 +555,13 @@ class SocradarincidentsConnector(BaseConnector):
         alarm_id_str: str,
         current_status: str,
         event_epoch: int | None,
-        run_automation: bool = True,
     ) -> dict[str, Any]:
-        """Build artifact dict with IOC-rich CEF payload.  SDI = alarm_id-status."""
+        """Build artifact dict with IOC-rich CEF payload.  SDI = alarm_id-status.
+
+        ``run_automation`` is intentionally not set: SOAR manages it for
+        embedded artifacts, enabling automation after the last artifact in
+        the container.
+        """
         alarm_id = incident.get("alarm_id")
         generic_title = incident.get("alarm_generic_title", "")
         iocs = self._extract_iocs(incident)
@@ -711,7 +699,6 @@ class SocradarincidentsConnector(BaseConnector):
             "cef_types": cef_types,
             "severity": self._map_severity(incident),
             "source_data_identifier": f"{alarm_id_str}-{current_status}",
-            "run_automation": run_automation,
         }
 
         if event_epoch:
@@ -809,18 +796,23 @@ class SocradarincidentsConnector(BaseConnector):
         last_poll_time = self._state.get(STATE_LAST_POLL_TIME)
 
         # ── Explicit window from param overrides everything ──
+        # SOAR's on_poll spec defines start_time/end_time as epoch milliseconds.
         p_start = param.get("start_time")
         p_end = param.get("end_time")
-        explicit_window = bool(p_start) and bool(p_end)
+        explicit_window = (p_start not in (None, "")) and (p_end not in (None, ""))
 
         if explicit_window:
-            start_epoch = self._coerce_epoch_seconds(p_start)
-            end_epoch = self._coerce_epoch_seconds(p_end)
-            if start_epoch is None or end_epoch is None:
-                return action_result.set_status(
-                    phantom.APP_ERROR,
-                    "Invalid start_time/end_time — must be numeric epoch (seconds or milliseconds).",
-                )
+            ret_val, start_ms = self._validate_integer(action_result, p_start, "start_time")
+            if phantom.is_fail(ret_val):
+                return action_result.get_status()
+            ret_val, end_ms = self._validate_integer(action_result, p_end, "end_time")
+            if phantom.is_fail(ret_val):
+                return action_result.get_status()
+            # Convert epoch milliseconds (SOAR spec) to the epoch seconds the API expects.
+            start_epoch = start_ms // 1000
+            end_epoch = end_ms // 1000
+            if start_epoch >= end_epoch:
+                return action_result.set_status(phantom.APP_ERROR, ERR_START_AFTER_END)
             self.save_progress(
                 MSG_POLL_EXPLICIT.format(
                     start=self._epoch_to_iso(start_epoch),
