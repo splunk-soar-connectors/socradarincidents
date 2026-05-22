@@ -61,8 +61,10 @@ from socradarincidents_consts import (
     DEFAULT_PAGE_SIZE,
     DEFAULT_RATE_LIMIT_WAIT,
     DEFAULT_SEVERITY,
+    ERR_ALL_CONTAINERS_FAILED,
     ERR_CONNECTION,
     ERR_CONNECTIVITY,
+    ERR_FORBIDDEN,
     ERR_HTTP,
     ERR_INVALID_INT,
     ERR_INVALID_JSON,
@@ -92,12 +94,14 @@ from socradarincidents_consts import (
     MSG_INIT,
     MSG_LAST_PAGE,
     MSG_PER_POLL_CAP,
+    MSG_POLL_EXPLICIT,
     MSG_POLL_FIRST_RUN,
     MSG_POLL_NOW,
     MSG_POLL_SCHEDULED,
     MSG_POLL_START,
     MSG_PROACTIVE_THROTTLE,
     MSG_RATE_LIMIT_WAIT,
+    MSG_SAVE_CONTAINER_FAILED,
     MSG_SEVERITY_UPDATED,
     MSG_STATE_TRIMMED,
     MSG_STATUS_CHANGE,
@@ -132,7 +136,7 @@ class SocradarincidentsConnector(BaseConnector):
         self._base_url: str | None = None
         self._api_key: str | None = None
         self._company_id: str | None = None
-        self._verify: bool = False
+        self._verify: bool = True
         self._state: dict[str, Any] = {}
 
         # Config values populated in initialize()
@@ -155,6 +159,34 @@ class SocradarincidentsConnector(BaseConnector):
             return action_result.set_status(phantom.APP_ERROR, ERR_NON_POSITIVE_INT.format(key)), None
         return phantom.APP_SUCCESS, parameter
 
+    @staticmethod
+    def _coerce_epoch_seconds(value: Any) -> int | None:
+        """
+        Coerce a numeric epoch value to seconds.
+
+        SOAR sometimes passes ``start_time``/``end_time`` as epoch milliseconds.
+        Anything larger than ~Sat Sep 9 2001 in milliseconds (10**12) is assumed
+        to already be milliseconds and gets divided by 1000.
+        """
+        if value is None or value == "":
+            return None
+        try:
+            num = int(value)
+        except (TypeError, ValueError):
+            return None
+        return num // 1000 if num > 10**12 else num
+
+    @staticmethod
+    def _coerce_positive_int(value: Any, default: int) -> int:
+        """Best-effort positive integer with safe fallback."""
+        if value in (None, "", 0):
+            return int(default)
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return int(default)
+        return parsed if parsed > 0 else int(default)
+
     # ──────────────────────────────────────────────────────────────
     #  Lifecycle
     # ──────────────────────────────────────────────────────────────
@@ -165,7 +197,7 @@ class SocradarincidentsConnector(BaseConnector):
         self._base_url = SOCRADAR_API_BASE_URL
         self._company_id = config.get("socradar_company_id")
         self._api_key = config.get("socradar_api_key")
-        self._verify = config.get("verify_server_cert", False)
+        self._verify = config.get("verify_server_cert", True)
 
         # Validate numeric config parameters
         first_run_raw = config.get("first_run_max_incidents", FIRST_RUN_MAX_INCIDENTS) or FIRST_RUN_MAX_INCIDENTS
@@ -213,7 +245,8 @@ class SocradarincidentsConnector(BaseConnector):
         if handler:
             return handler(param)
 
-        return self.set_status(phantom.APP_ERROR, f"Unsupported action: {action_id}")
+        action_result = self.add_action_result(ActionResult(dict(param)))
+        return action_result.set_status(phantom.APP_ERROR, f"Unsupported action: {action_id}")
 
     # ──────────────────────────────────────────────────────────────
     #  REST helper
@@ -223,12 +256,12 @@ class SocradarincidentsConnector(BaseConnector):
         self,
         endpoint: str,
         action_result: ActionResult,
-        headers: dict | None = None,
-        params: dict | None = None,
-        data: dict | None = None,
-        json_body: dict | None = None,
+        headers: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
+        json_body: dict[str, Any] | None = None,
         method: str = "get",
-    ) -> tuple[bool, dict | None, requests.Response | None]:
+    ) -> tuple[bool, dict[str, Any] | None, requests.Response | None]:
         """
         Central REST call helper.
 
@@ -263,11 +296,12 @@ class SocradarincidentsConnector(BaseConnector):
                 timeout=API_TIMEOUT_SECONDS,
             )
 
-            # Debug data for SOAR UI
+            # Debug data for SOAR UI (scrub sensitive headers)
             if hasattr(action_result, "add_debug_data"):
+                safe_headers = {k: v for k, v in response.headers.items() if not any(s in k.lower() for s in ("auth", "key", "token", "cookie"))}
                 action_result.add_debug_data({"r_status_code": response.status_code})
                 action_result.add_debug_data({"r_text": response.text[:2000] if response.text else ""})
-                action_result.add_debug_data({"r_headers": dict(response.headers)})
+                action_result.add_debug_data({"r_headers": safe_headers})
 
             # Parse JSON
             resp_data = None
@@ -289,11 +323,17 @@ class SocradarincidentsConnector(BaseConnector):
                 action_result.set_status(phantom.APP_ERROR, ERR_UNAUTHORIZED)
                 return phantom.APP_ERROR, None, response
 
-            # 429 rate limit
+            # 403
+            if response.status_code == 403:
+                action_result.set_status(phantom.APP_ERROR, ERR_FORBIDDEN)
+                return phantom.APP_ERROR, None, response
+
+            # 429 rate limit — caller decides whether to retry; don't pollute
+            # action_result so a subsequent successful retry isn't shadowed.
             if response.status_code == 429:
                 retry_after = self._get_retry_wait(response)
                 msg = ERR_RATE_LIMIT.format(seconds=retry_after)
-                action_result.set_status(phantom.APP_ERROR, msg)
+                self.debug_print(msg)
                 return phantom.APP_ERROR, None, response
 
             # Other errors
@@ -347,7 +387,9 @@ class SocradarincidentsConnector(BaseConnector):
     # ──────────────────────────────────────────────────────────────
 
     @staticmethod
-    def _extract_alarms_from_response(response_data: dict | None) -> tuple[list[dict], int | None]:
+    def _extract_alarms_from_response(
+        response_data: dict[str, Any] | None,
+    ) -> tuple[list[dict[str, Any]], int | None]:
         """
         Handle dual response format:
           - Without include_total_records: data is a list
@@ -744,42 +786,73 @@ class SocradarincidentsConnector(BaseConnector):
         """
         Ingest SOCRadar incidents into Splunk SOAR.
 
-        - Scheduled poll: resume from state checkpoint, update state after
-        - Poll Now: fetch recent items, do NOT update state
-        - First run: fetch last N hours (configurable)
+        Time-window precedence (highest -> lowest):
+          1. ``start_time`` + ``end_time`` params (replay / explicit backfill)
+          2. State checkpoint (``last_poll_time``)
+          3. First-run lookback window (``FIRST_RUN_LOOKBACK_HOURS``)
+
+        State write rules:
+          - Poll Now           -> NEVER persist state (testing must not poison dedup)
+          - Explicit window    -> NEVER persist state (replay must not move checkpoint)
+          - Scheduled poll     -> persist alarm status map AND last_poll_time
         """
         action_result = self.add_action_result(ActionResult(dict(param)))
+        # Default to SUCCESS — only HTTP failures inside the loop or terminal
+        # save-failures should flip this to APP_ERROR.
         action_result.set_status(phantom.APP_SUCCESS)
 
         if not (self._company_id and self._api_key):
             return action_result.set_status(phantom.APP_ERROR, ERR_MISSING_CONFIG)
 
-        # ── Time window & limits ──
         now_utc = datetime.now(timezone.utc)
-        end_epoch = int(now_utc.timestamp())
         is_poll_now = self.is_poll_now()
         last_poll_time = self._state.get(STATE_LAST_POLL_TIME)
 
-        if is_poll_now:
-            # Poll Now: use last checkpoint or last N hours; limited by container_count
-            max_incidents = int(param.get("container_count", 5) or 5)
-            if last_poll_time:
-                start_epoch = int(last_poll_time)
-            else:
-                start_epoch = int((now_utc - timedelta(hours=FIRST_RUN_LOOKBACK_HOURS)).timestamp())
-            self.save_progress(MSG_POLL_NOW.format(count=max_incidents))
+        # ── Explicit window from param overrides everything ──
+        p_start = param.get("start_time")
+        p_end = param.get("end_time")
+        explicit_window = bool(p_start) and bool(p_end)
 
-        elif last_poll_time is None:
-            # First scheduled run: last N hours
-            start_epoch = int((now_utc - timedelta(hours=FIRST_RUN_LOOKBACK_HOURS)).timestamp())
-            max_incidents = self._first_run_max_incidents
-            self.save_progress(MSG_POLL_FIRST_RUN.format(hours=FIRST_RUN_LOOKBACK_HOURS, max=max_incidents))
-
+        if explicit_window:
+            start_epoch = self._coerce_epoch_seconds(p_start)
+            end_epoch = self._coerce_epoch_seconds(p_end)
+            if start_epoch is None or end_epoch is None:
+                return action_result.set_status(
+                    phantom.APP_ERROR,
+                    "Invalid start_time/end_time — must be numeric epoch (seconds or milliseconds).",
+                )
+            self.save_progress(
+                MSG_POLL_EXPLICIT.format(
+                    start=self._epoch_to_iso(start_epoch),
+                    end=self._epoch_to_iso(end_epoch),
+                )
+            )
         else:
-            # Subsequent scheduled run: from checkpoint
-            start_epoch = int(last_poll_time)
-            max_incidents = self._max_incidents_per_poll
+            end_epoch = int(now_utc.timestamp())
+            if is_poll_now:
+                start_epoch = int(last_poll_time) if last_poll_time else int((now_utc - timedelta(hours=FIRST_RUN_LOOKBACK_HOURS)).timestamp())
+            elif last_poll_time is None:
+                start_epoch = int((now_utc - timedelta(hours=FIRST_RUN_LOOKBACK_HOURS)).timestamp())
+            else:
+                start_epoch = int(last_poll_time)
+
+        # ── Resolve container_count (param overrides config in every mode) ──
+        param_container_count = param.get("container_count")
+        if is_poll_now:
+            max_incidents = self._coerce_positive_int(param_container_count, default=5)
+            self.save_progress(MSG_POLL_NOW.format(count=max_incidents))
+        elif explicit_window:
+            max_incidents = self._coerce_positive_int(param_container_count, default=self._max_incidents_per_poll)
+        elif last_poll_time is None:
+            max_incidents = self._coerce_positive_int(param_container_count, default=self._first_run_max_incidents)
+            self.save_progress(MSG_POLL_FIRST_RUN.format(hours=FIRST_RUN_LOOKBACK_HOURS, max=max_incidents))
+        else:
+            max_incidents = self._coerce_positive_int(param_container_count, default=self._max_incidents_per_poll)
             self.save_progress(MSG_POLL_SCHEDULED.format(max=max_incidents))
+
+        # ── Resolve artifact_count (global cap; default = container cap) ──
+        max_artifacts = self._coerce_positive_int(param.get("artifact_count"), default=max_incidents)
+        effective_max = min(max_incidents, max_artifacts)
 
         self.save_progress(
             MSG_POLL_START.format(
@@ -789,16 +862,20 @@ class SocradarincidentsConnector(BaseConnector):
         )
 
         # ── State setup ──
-        alarm_status_map: dict[str, str] = self._state.get(STATE_ALARM_STATUS, {})
+        # Persist only on scheduled polls AND only when no explicit window was supplied.
+        persist_state = (not is_poll_now) and (not explicit_window)
+        # Work on a copy so transient runs (Poll Now / replay) cannot mutate dedup state.
+        alarm_status_map: dict[str, str] = dict(self._state.get(STATE_ALARM_STATUS, {}))
 
         endpoint = INCIDENTS_ENDPOINT.format(company_id=self._company_id)
         current_page = 1
         new_count = 0
         skipped_count = 0
+        save_failures = 0
         last_response: requests.Response | None = None
 
         # ── Pagination loop ──
-        while current_page <= MAX_PAGES_PER_POLL and new_count < max_incidents:
+        while current_page <= MAX_PAGES_PER_POLL and new_count < effective_max:
             self.save_progress(MSG_FETCHING_PAGE.format(current=current_page, count=new_count))
 
             # Proactive throttle based on previous response
@@ -826,13 +903,11 @@ class SocradarincidentsConnector(BaseConnector):
                 wait = self._get_retry_wait(raw_response)
                 self.save_progress(MSG_RATE_LIMIT_WAIT.format(seconds=wait))
                 time.sleep(wait)
-                # Reset action_result status for retry
-                action_result.set_status(phantom.APP_SUCCESS)
                 ret_val, resp_data, raw_response = self._make_rest_call(endpoint, action_result, params=params)
                 last_response = raw_response
 
             if phantom.is_fail(ret_val):
-                # Non-recoverable error — save progress so far and return
+                # Non-recoverable error — keep progress and exit loop
                 break
 
             alarms, total_records = self._extract_alarms_from_response(resp_data)
@@ -843,7 +918,8 @@ class SocradarincidentsConnector(BaseConnector):
             if not alarms:
                 if resp_data:
                     self.debug_print(
-                        f"No alarms on page {current_page}. Response keys: {list(resp_data.keys()) if isinstance(resp_data, dict) else type(resp_data).__name__}"
+                        f"No alarms on page {current_page}. Response keys: "
+                        f"{list(resp_data.keys()) if isinstance(resp_data, dict) else type(resp_data).__name__}"
                     )
                 else:
                     self.debug_print(f"No alarms on page {current_page}")
@@ -867,34 +943,32 @@ class SocradarincidentsConnector(BaseConnector):
                     skipped_count += 1
                     continue
 
-                # Log status changes
                 if previous_status is not None and previous_status != current_status:
                     self.debug_print(MSG_STATUS_CHANGE.format(alarm_id=alarm_id_str, old=previous_status, new=current_status))
 
-                # Parse event timestamp
                 event_epoch = self._parse_incident_timestamp(incident)
 
-                # Create container with embedded artifact (single HTTP call)
                 container_id = self._ingest_incident(incident, alarm_id_str, current_status, event_epoch)
                 if not container_id:
+                    save_failures += 1
+                    self.save_progress(MSG_SAVE_CONTAINER_FAILED.format(alarm_id=alarm_id_str))
                     continue
 
-                # Update dedup map
                 alarm_status_map[alarm_id_str] = current_status
                 new_count += 1
 
-                # Periodic state save to preserve progress
-                if new_count % PERIODIC_STATE_SAVE_INTERVAL == 0:
+                # Periodic state save — only for scheduled polls without explicit window
+                if persist_state and new_count % PERIODIC_STATE_SAVE_INTERVAL == 0:
                     self._state[STATE_ALARM_STATUS] = alarm_status_map
                     self.save_state(self._state)
                     self.debug_print(f"Periodic state save at {new_count} containers")
 
-                if new_count >= max_incidents:
-                    self.save_progress(MSG_PER_POLL_CAP.format(max=max_incidents))
+                if new_count >= effective_max:
+                    self.save_progress(MSG_PER_POLL_CAP.format(max=effective_max))
                     break
 
             # End-of-page checks
-            if new_count >= max_incidents:
+            if new_count >= effective_max:
                 break
 
             if len(alarms) < DEFAULT_PAGE_SIZE:
@@ -904,17 +978,20 @@ class SocradarincidentsConnector(BaseConnector):
             current_page += 1
             time.sleep(PAGE_DELAY_SECONDS)
 
+        # ── Failure detection: nothing ingested but every container failed ──
+        if new_count == 0 and save_failures > 0:
+            return action_result.set_status(phantom.APP_ERROR, ERR_ALL_CONTAINERS_FAILED.format(count=save_failures))
+
         # ── State trim ──
-        if len(alarm_status_map) > STATE_MAX_ALARMS:
+        if persist_state and len(alarm_status_map) > STATE_MAX_ALARMS:
             items = sorted(alarm_status_map.items(), key=lambda item: item[0])
             alarm_status_map = dict(items[-STATE_MAX_ALARMS:])
             self.debug_print(MSG_STATE_TRIMMED.format(max=STATE_MAX_ALARMS))
 
-        # ── Save state (only for scheduled polling) ──
-        self._state[STATE_ALARM_STATUS] = alarm_status_map
-        self._state[STATE_LAST_UPDATED] = now_utc.isoformat()
-
-        if not is_poll_now:
+        # ── Save state (scheduled poll only, no explicit window) ──
+        if persist_state:
+            self._state[STATE_ALARM_STATUS] = alarm_status_map
+            self._state[STATE_LAST_UPDATED] = now_utc.isoformat()
             self._state[STATE_LAST_POLL_TIME] = end_epoch
 
         # ── Summary ──
@@ -924,6 +1001,7 @@ class SocradarincidentsConnector(BaseConnector):
                 "skipped_same_status": skipped_count,
                 "pages_traversed": current_page,
                 "total_tracked": len(alarm_status_map),
+                "save_failures": save_failures,
             }
         )
 
@@ -942,9 +1020,14 @@ class SocradarincidentsConnector(BaseConnector):
         """Fetch a single incident by alarm_id."""
         action_result = self.add_action_result(ActionResult(dict(param)))
 
-        incident_id = param.get("incident_id", "")
-        if not incident_id:
+        incident_id_raw = param.get("incident_id", "")
+        if not incident_id_raw:
             return action_result.set_status(phantom.APP_ERROR, "incident_id is required")
+
+        ret_val, incident_id_int = self._validate_integer(action_result, incident_id_raw, "incident_id")
+        if phantom.is_fail(ret_val):
+            return action_result.get_status()
+        incident_id = str(incident_id_int)
 
         endpoint = INCIDENTS_ENDPOINT.format(company_id=self._company_id)
 
@@ -1072,9 +1155,17 @@ def main():
     argparser.add_argument("input_test_json", help="Input Test JSON file")
     argparser.add_argument("-u", "--username", help="username", required=False)
     argparser.add_argument("-p", "--password", help="password", required=False)
+    argparser.add_argument(
+        "--verify",
+        action="store_true",
+        help="Verify TLS certificates when logging in to SOAR (default: False).",
+        required=False,
+    )
 
     args = argparser.parse_args()
     session_id = None
+    csrftoken = None
+    headers = None
 
     if args.username is not None and args.password is None:
         import getpass
@@ -1085,10 +1176,30 @@ def main():
         try:
             login_url = SocradarincidentsConnector._get_phantom_base_url() + "/login"
             print(f"Accessing the Login page at {login_url}")
-            # Login handled by SOAR platform
-            session_id = "local_test_session"
+            r = requests.get(login_url, verify=args.verify, timeout=API_TIMEOUT_SECONDS)
+            csrftoken = r.cookies["csrftoken"]
+
+            data = {
+                "username": args.username,
+                "password": args.password,
+                "csrfmiddlewaretoken": csrftoken,
+            }
+            headers = {
+                "Cookie": f"csrftoken={csrftoken}",
+                "Referer": login_url,
+            }
+
+            print("Logging into Platform to get the session id")
+            r2 = requests.post(
+                login_url,
+                verify=args.verify,
+                data=data,
+                headers=headers,
+                timeout=API_TIMEOUT_SECONDS,
+            )
+            session_id = r2.cookies["sessionid"]
         except Exception as e:
-            print(f"Unable to get session id: {e}")
+            print(f"Unable to get session id from the platform. Error: {e}")
             sys.exit(1)
 
     with open(args.input_test_json) as f:
@@ -1101,6 +1212,7 @@ def main():
 
         if session_id is not None:
             in_json["user_session_token"] = session_id
+            connector._set_csrf_info(csrftoken, headers["Referer"])
 
         ret_val = connector._handle_action(json.dumps(in_json), None)
         print(json.dumps(json.loads(ret_val), indent=4))

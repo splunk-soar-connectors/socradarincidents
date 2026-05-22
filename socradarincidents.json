@@ -45,7 +45,7 @@
             "description": "Verify server certificate",
             "data_type": "boolean",
             "required": false,
-            "default": false,
+            "default": true,
             "order": 2
         },
         "first_run_max_incidents": {
@@ -79,28 +79,28 @@
             "action": "on poll",
             "identifier": "on_poll",
             "description": "Ingest SOCRadar incidents with deduplication and state management",
-            "verbose": "Fetches incidents from SOCRadar API v4 with pagination, rate-limit handling, and state-based deduplication. Creates containers and artifacts for new or status-changed incidents. First run fetches the last 10 hours; subsequent runs resume from the last checkpoint.",
+            "verbose": "Fetches incidents from SOCRadar API v4 with pagination, rate-limit handling, and state-based deduplication. Creates containers and artifacts for new or status-changed incidents. Time-window precedence: (1) explicit start_time/end_time params override everything, (2) otherwise the last poll checkpoint, (3) otherwise the configured first-run lookback window. The state checkpoint is updated only on scheduled polls without an explicit window; Poll Now and explicit replays leave state untouched. container_count caps containers per run; artifact_count is honored as a global upper bound (one artifact per container in this app, so the effective cap is min(container_count, artifact_count)).",
             "type": "ingest",
             "read_only": true,
             "parameters": {
                 "container_count": {
-                    "description": "Maximum number of containers to create (used by Poll Now)",
+                    "description": "Maximum number of containers to create in this run (overrides asset config when provided)",
                     "data_type": "numeric",
                     "required": false,
                     "default": 5
                 },
                 "start_time": {
-                    "description": "Start time for ingestion (epoch)",
+                    "description": "Optional start of explicit ingestion window (epoch seconds or milliseconds). When provided together with end_time, overrides the checkpoint and prevents state updates.",
                     "data_type": "numeric",
                     "required": false
                 },
                 "end_time": {
-                    "description": "End time for ingestion (epoch)",
+                    "description": "Optional end of explicit ingestion window (epoch seconds or milliseconds). When provided together with start_time, overrides the checkpoint and prevents state updates.",
                     "data_type": "numeric",
                     "required": false
                 },
                 "artifact_count": {
-                    "description": "Maximum number of artifacts per container",
+                    "description": "Global cap on artifacts created during this run (defaults to container_count since this app creates one artifact per container)",
                     "data_type": "numeric",
                     "required": false
                 }
@@ -278,6 +278,17 @@
                     "data_type": "boolean"
                 },
                 {
+                    "data_path": "summary.alarm_id",
+                    "data_type": "string",
+                    "contains": [
+                        "socradar incident id"
+                    ]
+                },
+                {
+                    "data_path": "summary.new_status",
+                    "data_type": "string"
+                },
+                {
                     "data_path": "action_result.parameter.incident_id",
                     "data_type": "string",
                     "contains": [
@@ -362,6 +373,17 @@
                     "data_type": "boolean"
                 },
                 {
+                    "data_path": "summary.alarm_id",
+                    "data_type": "string",
+                    "contains": [
+                        "socradar incident id"
+                    ]
+                },
+                {
+                    "data_path": "summary.new_severity",
+                    "data_type": "string"
+                },
+                {
                     "data_path": "action_result.parameter.incident_id",
                     "data_type": "string",
                     "contains": [
@@ -386,10 +408,5 @@
     ],
     "pip_dependencies": {},
     "pip3_dependencies": {},
-    "pip313_dependencies": {
-        "wheel": []
-    },
-    "pip39_dependencies": {
-        "wheel": []
-    }
+    "pip313_dependencies": {}
 }

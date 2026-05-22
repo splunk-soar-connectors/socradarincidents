@@ -175,6 +175,8 @@ ERR_INVALID_STATUS = "Invalid status: {status}. Valid values: OPEN, INVESTIGATIN
 ERR_INVALID_SEVERITY = "Invalid severity: {severity}. Valid values: Low, Medium, High"
 ERR_INVALID_INT = "Please provide a valid integer value for '{}'"
 ERR_NON_POSITIVE_INT = "Please provide a non-zero positive integer value for '{}'"
+ERR_FORBIDDEN = "Forbidden (403). Insufficient permissions for this resource."
+ERR_ALL_CONTAINERS_FAILED = "All {count} container saves failed; aborting ingestion."
 
 # ──────────────────────────────────────────────────────────────────
 #  Success messages
@@ -194,6 +196,8 @@ MSG_POLL_START = "Starting ingestion — time window {start} to {end}"
 MSG_POLL_FIRST_RUN = "First run: fetching last {hours} hours (max {max} incidents)"
 MSG_POLL_SCHEDULED = "Scheduled poll: from last checkpoint to now (max {max} incidents)"
 MSG_POLL_NOW = "Poll Now: fetching up to {count} incidents"
+MSG_POLL_EXPLICIT = "Explicit window from param: {start} to {end}"
+MSG_SAVE_CONTAINER_FAILED = "Failed to save container for alarm {alarm_id}"
 MSG_FETCHING_PAGE = "Fetching page {current} — {count} incidents processed so far"
 MSG_RATE_LIMIT_WAIT = "Rate limit hit. Waiting {seconds}s before retry."
 MSG_PROACTIVE_THROTTLE = "Rate limit remaining: {remaining}. Throttling {seconds}s."

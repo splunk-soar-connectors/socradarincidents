@@ -52,16 +52,16 @@ Ingest SOCRadar incidents with deduplication and state management
 Type: **ingest** <br>
 Read only: **True**
 
-Fetches incidents from SOCRadar API v4 with pagination, rate-limit handling, and state-based deduplication. Creates containers and artifacts for new or status-changed incidents. First run fetches the last 10 hours; subsequent runs resume from the last checkpoint.
+Fetches incidents from SOCRadar API v4 with pagination, rate-limit handling, and state-based deduplication. Creates containers and artifacts for new or status-changed incidents. Time-window precedence: (1) explicit start_time/end_time params override everything, (2) otherwise the last poll checkpoint, (3) otherwise the configured first-run lookback window. The state checkpoint is updated only on scheduled polls without an explicit window; Poll Now and explicit replays leave state untouched. container_count caps containers per run; artifact_count is honored as a global upper bound (one artifact per container in this app, so the effective cap is min(container_count, artifact_count)).
 
 #### Action Parameters
 
 PARAMETER | REQUIRED | DESCRIPTION | TYPE | CONTAINS
 --------- | -------- | ----------- | ---- | --------
-**container_count** | optional | Maximum number of containers to create (used by Poll Now) | numeric | |
-**start_time** | optional | Start time for ingestion (epoch) | numeric | |
-**end_time** | optional | End time for ingestion (epoch) | numeric | |
-**artifact_count** | optional | Maximum number of artifacts per container | numeric | |
+**container_count** | optional | Maximum number of containers to create in this run (overrides asset config when provided) | numeric | |
+**start_time** | optional | Optional start of explicit ingestion window (epoch seconds or milliseconds). When provided together with end_time, overrides the checkpoint and prevents state updates. | numeric | |
+**end_time** | optional | Optional end of explicit ingestion window (epoch seconds or milliseconds). When provided together with start_time, overrides the checkpoint and prevents state updates. | numeric | |
+**artifact_count** | optional | Global cap on artifacts created during this run (defaults to container_count since this app creates one artifact per container) | numeric | |
 
 #### Action Output
 
@@ -128,6 +128,8 @@ action_result.message | string | | |
 action_result.data.\*.alarm_id | string | `socradar incident id` | |
 action_result.data.\*.new_status | string | | |
 summary.status_changed | boolean | | |
+summary.alarm_id | string | `socradar incident id` | |
+summary.new_status | string | | |
 action_result.parameter.incident_id | string | `socradar incident id` | |
 action_result.parameter.status | string | | |
 action_result.parameter.comment | string | | |
@@ -159,6 +161,8 @@ action_result.message | string | | |
 action_result.data.\*.alarm_id | string | `socradar incident id` | |
 action_result.data.\*.new_severity | string | | |
 summary.severity_changed | boolean | | |
+summary.alarm_id | string | `socradar incident id` | |
+summary.new_severity | string | | |
 action_result.parameter.incident_id | string | `socradar incident id` | |
 action_result.parameter.severity | string | | |
 summary.total_objects | numeric | | |
