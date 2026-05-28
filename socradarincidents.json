@@ -18,7 +18,7 @@
     ],
     "license": "Copyright (c) 2025-2026 SOCRadar",
     "app_version": "1.0.0",
-    "utctime_updated": "2026-03-10T00:00:00.000000Z",
+    "utctime_updated": "2026-05-28T09:14:27.113953Z",
     "package_name": "phantom_socradarincidents",
     "main_module": "socradarincidents_connector.py",
     "min_phantom_version": "6.3.0",
