@@ -48,7 +48,11 @@ repos:
       - id: mdformat
         exclude: "release_notes/.*"
   - repo: https://github.com/returntocorp/semgrep
+<<<<<<< feat/initial-connector
     rev: v1.163.0
+=======
+    rev: v1.136.0
+>>>>>>> main
     hooks:
       - id: semgrep
         additional_dependencies: ["setuptools==81.0.0"]
