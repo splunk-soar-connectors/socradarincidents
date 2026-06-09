@@ -1,6 +1,6 @@
 {
     "appid": "c7f3e2a1-8b9d-4e5f-a6b2-1d3c4e5f6789",
-    "name": "SOCRadar Incidents",
+    "name": "SOCRadar Incidents for SOAR",
     "description": "Ingest SOCRadar threat intelligence incidents (API v4) into Splunk SOAR with deduplication, rate-limit handling, and state-based polling.",
     "type": "threat intel",
     "product_vendor": "SOCRadar",

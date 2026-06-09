@@ -1,4 +1,4 @@
-# SOCRadar Incidents
+# SOCRadar Incidents for SOAR
 
 Publisher: SOCRadar <br>
 Connector Version: 1.0.0 <br>
@@ -10,7 +10,7 @@ Ingest SOCRadar threat intelligence incidents (API v4) into Splunk SOAR with ded
 
 ### Configuration variables
 
-This table lists the configuration variables required to operate SOCRadar Incidents. These variables are specified when configuring a SOCRadar Platform asset in Splunk SOAR.
+This table lists the configuration variables required to operate SOCRadar Incidents for SOAR. These variables are specified when configuring a SOCRadar Platform asset in Splunk SOAR.
 
 VARIABLE | REQUIRED | TYPE | DESCRIPTION
 -------- | -------- | ---- | -----------
